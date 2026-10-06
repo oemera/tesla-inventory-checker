@@ -1,0 +1,14 @@
+services:
+  watcher:
+    image: ghcr.io/CHANGE-ME/tesla-inventory-checker:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./profiles.json:/app/config/profiles.json:ro
+      - ./state:/app/state
+    healthcheck:
+      test: ["CMD", "node", "/app/dist/healthcheck.js"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s

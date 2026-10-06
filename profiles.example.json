@@ -1,0 +1,16 @@
+{
+  "profiles": [
+    {
+      "id": "model-3-premium-awd-grey-black",
+      "enabled": true,
+      "market": "de",
+      "model": "m3",
+      "condition": "new",
+      "trim": ["Premium Allradantrieb", "Premium AWD"],
+      "exteriorColors": ["Stealth Grey", "Grau"],
+      "interiorColors": ["Schwarz", "All Black"],
+      "maxPriceEur": 55000,
+      "notify": { "telegram": true, "email": true }
+    }
+  ]
+}

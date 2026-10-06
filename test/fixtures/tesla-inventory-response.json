@@ -1,0 +1,12 @@
+[
+  {
+    "vin": "LRW3E7FA8PC123456",
+    "vehicleId": "inventory-123456",
+    "trimName": "Premium Allradantrieb",
+    "exteriorColor": "Stealth Grey",
+    "interiorColor": "Schwarz",
+    "price": "54.990 €",
+    "deliveryLocation": "Berlin",
+    "orderUrl": "https://www.tesla.com/de_DE/order/LRW3E7FA8PC123456"
+  }
+]
