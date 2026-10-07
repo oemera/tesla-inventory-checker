@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s scraper -p 'test_*.py'
+      - run: npm run test:sandbox
+      - if: always()
+        run: docker compose -p tesla-sandbox-test -f compose.sandbox.yaml down
       - run: docker compose -p tesla-ci -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from integration
       - if: always()
         run: docker compose -p tesla-ci -f compose.test.yaml down --volumes

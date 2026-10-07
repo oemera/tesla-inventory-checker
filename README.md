@@ -47,6 +47,8 @@ repräsentative Neuwagendaten die Zuordnung bestätigen; ein leerer Bestand gen�
 
 ## Einrichtung auf dem NAS
 
+Für die konkrete, eingerichtete Installation siehe [NAS-Betriebsanleitung](docs/NAS-OPERATIONS.md).
+
 Docker und Docker Compose müssen installiert sein. Der SSH-Benutzer braucht
 Docker-Zugriff; die Docker-Gruppe verleiht praktisch Administratorrechte.
 SSH nur im Heimnetz/VPN freigeben. Kein Router-Portforwarding nötig.
@@ -71,7 +73,7 @@ Konfiguration in `.env`:
 | `INVENTORY_PROVIDER` | `browser`; `direct` ausdrücklich auswählbarer alter Adapter, kein automatischer Fallback |
 | `POLL_INTERVAL_SECONDS` | `60`, Minimum 60 |
 | `SESSION_MAX_AGE_SECONDS` | `1800` |
-| `BROWSER_NO_SANDBOX` | `false`, siehe Sicherheitsentscheidung unten |
+| `BROWSER_NO_SANDBOX` | Muss `false` bleiben; unsicherer Betrieb wird abgelehnt |
 | `NOTIFY_ON_FIRST_SEEN` | `false`: erste vollständige Aufnahme bleibt still |
 | `TECHNICAL_ALERTS` | `false`: nur Fahrzeugmeldungen; optional gebündelte Abruf-Störungsmeldungen |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Nur an den Watcher übergeben |
@@ -82,18 +84,18 @@ Aktiviere in den Profilen nur Kanäle, für die Zugangsdaten vorhanden sind.
 Zugangsdaten, reale Profile, Browserdaten und SQLite sind aus Git und Docker-Builds
 ausgeschlossen. Bereits öffentlich geteilte Bot-Tokens vor Produktion rotieren.
 
-### Sicherheitsentscheidung: Chrome-Sandbox
+### Chrome-Sandbox: verpflichtend und geprüft
 
-Die Standardkonfiguration lässt die Browser-Sandbox aktiviert. Der ursprüngliche
-erfolgreiche Einmaltest benötigte `--no-sandbox`. Wenn `browser_start_failed`
-auftritt, zuerst die Browser-Sandbox/Host-Kompatibilität prüfen.
+Ab v0.3.0 verwendet der Scraper ein eingechecktes, eng angepasstes
+[Seccomp-Profil](security/README.md). Damit läuft Chrome auf dem getesteten NAS
+mit Xvfb **und** aktiver Browser-Sandbox. AppArmor, Nicht-root, entfernte Linux-
+Capabilities, `no-new-privileges` und read-only bleiben erhalten.
 
-`BROWSER_NO_SANDBOX=true` ist eine **ausdrückliche Risikoentscheidung**, kein
-stiller automatischer Fallback. Der Browser verliert dabei eine Schutzschicht
-gegen schädliche Webseiten. Nicht-root, fehlende Linux-Capabilities, read-only
-Dateisystem, temporäres Browserprofil und Ressourcenlimits begrenzen das Risiko,
-ersetzen die Chrome-Sandbox aber nicht. Niemals `privileged`, den Docker-Socket,
-private NAS-Verzeichnisse oder Host-Netzwerk hinzufügen, um den Start zu erzwingen.
+Vor jedem neuen Browser-/Sitzungsstart prüft der Scraper Chromes eigene Statusseite
+auf Namespace-, PID-, Netzwerk- und Seccomp-Schutz. Schlägt die Prüfung fehl, findet
+kein Tesla-Abruf statt. `BROWSER_NO_SANDBOX=true` wird ausdrücklich abgelehnt.
+Niemals `privileged`, zusätzliche Host-Rechte oder eine deaktivierte Sandbox
+verwenden, um den Start zu erzwingen.
 
 Der Scraper erhält keine SMTP-/Telegram-Secrets, keine dauerhaften Volumes und
 keine veröffentlichten Ports. Beide Dienste benötigen ausgehenden Internetzugang.
@@ -104,6 +106,7 @@ Lokal auf dem NAS bauen (alternativ Release-Images ziehen):
 
 ```sh
 docker compose build
+docker compose -p tesla-sandbox-test -f compose.sandbox.yaml run --rm sandbox-check
 docker compose up -d scraper
 docker compose run --rm live-check
 ```
@@ -130,6 +133,23 @@ Restart-Sturm auslösen. Der Zustand der Datenquelle ist getrennt sichtbar über
 `status.js` (letzter erfolgreicher Poll, Versandwarteschlange) und Scraper `/health`
 (letzter erfolgreicher Abruf, Fehlercode). Eine grüne Containeranzeige allein
 beweist keine aktuellen Fahrzeugdaten.
+
+Mit `TECHNICAL_ALERTS=true` sendet der laufende Watcher nach drei aufeinanderfolgenden
+Abruffehlern eine Störungsmeldung über **alle konfigurierten Kanäle**, unabhängig
+von den Fahrzeugprofilen. Erfolgreich gesendete Störungsmeldungen werden auf eine
+pro Stunde begrenzt. Durch Tesla-Fehlerpausen kann die erste Meldung bei einer
+Sperre etwa 30 Minuten benötigen. Fehlgeschlagene Fahrzeugnachrichten bleiben in
+der Versandwarteschlange, lösen aber keinen eigenen Störungsalarm aus.
+
+`restart: unless-stopped` startet beendete Container nach einem Absturz oder einem
+Docker-Neustart erneut, sofern sie nicht bewusst gestoppt wurden. Ein lediglich
+`unhealthy` markierter, aber noch laufender Container wird dadurch nicht neu gestartet.
+
+**NAS-, Strom- oder vollständige Internetausfälle können die Dienste nicht selbst
+melden.** Dafür ist ein unabhängiger externer Ausfallwächter erforderlich, etwa
+ein Dead-Man-Monitor mit ausgehenden Erfolgspings nach vollständigen Abrufzyklen.
+Eine solche externe Überwachung ist noch nicht integriert; ein grüner Docker-
+Healthcheck oder aktiviertes SMTP ersetzt sie nicht.
 
 Ein separat gestarteter, begrenzter Dauertest bleibt ohne echte Meldungen:
 
@@ -179,12 +199,20 @@ docker compose run --rm --no-deps watcher node dist/test-notification.js
 Node >=22.13, Python 3.13 für die Produktionsumgebung; die Python-Unit-Tests
 benötigen nur die Standardbibliothek. CI fragt Tesla nicht ab und sendet keine Nachrichten.
 
+Der echte Browser-Sandbox-Test benötigt einen kompatiblen Linux-AMD64-Docker-Host.
+Auf dem getesteten Apple-Silicon-Mac verweigert Docker Desktop im emulierten
+AMD64-Container die erforderlichen User-Namespaces auch mit dem angepassten Profil.
+Unit- und HTTP-Integrationstests sind dort möglich; Browser-/Sandbox-/Live-Tests
+auf dem NAS ausführen. Keine Sicherheitsoptionen abschalten, um die Emulation
+zu erzwingen.
+
 ```sh
 npm ci
 npm run check
 npm test
 npm run test:python
 npm run build
+npm run test:sandbox
 docker compose -p tesla-tests -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from integration
 docker compose -p tesla-tests -f compose.test.yaml down --volumes
 ```
@@ -196,10 +224,10 @@ Implementierung wird nicht in das Produktionsimage kopiert.
 
 ## Releases, Updates und Rückwechsel
 
-Ein Tag wie `v0.2.0` führt zuerst Tests aus und veröffentlicht dann zwei AMD64-Images:
+Ein Tag wie `v0.3.0` führt zuerst Tests inklusive Offline-Browserprüfung aus und veröffentlicht dann zwei AMD64-Images:
 
-- `ghcr.io/<owner>/<repository>:0.2.0`
-- `ghcr.io/<owner>/<repository>-scraper:0.2.0`
+- `ghcr.io/<owner>/<repository>:0.3.0`
+- `ghcr.io/<owner>/<repository>-scraper:0.3.0`
 
 Compose verwendet zunächst lokale Image-Namen für `docker compose build`.
 Für Releases die beiden Image-Variablen in `.env` auf die GHCR-Namen setzen.
@@ -210,6 +238,7 @@ Auf dem NAS:
 
 ```sh
 docker compose pull
+docker compose -p tesla-sandbox-test -f compose.sandbox.yaml run --rm sandbox-check
 docker compose up -d scraper
 docker compose run --rm live-check
 docker compose up -d watcher

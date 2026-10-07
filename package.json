@@ -1,6 +1,6 @@
 {
   "name": "tesla-inventory-checker",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Self-hosted Tesla Germany inventory watcher with Telegram and email alerts.",
   "type": "module",
@@ -16,6 +16,7 @@
     "test": "tsx --test test/**/*.test.ts",
     "check": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json",
     "test:python": "python3 -m unittest discover -s scraper -p 'test_*.py'",
+    "test:sandbox": "node test/check-compose-security.mjs && docker compose -p tesla-sandbox-test -f compose.sandbox.yaml run --build --rm sandbox-check",
     "status": "node dist/status.js"
   },
   "dependencies": {

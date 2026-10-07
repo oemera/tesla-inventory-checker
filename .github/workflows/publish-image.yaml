@@ -20,6 +20,9 @@ jobs:
       - run: npm ci
       - run: npm run check && npm test && npm run build
       - run: python -m unittest discover -s scraper -p 'test_*.py'
+      - run: npm run test:sandbox
+      - if: always()
+        run: docker compose -p tesla-sandbox-test -f compose.sandbox.yaml down
       - run: docker compose -p tesla-release-test -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from integration
       - if: always()
         run: docker compose -p tesla-release-test -f compose.test.yaml down --volumes

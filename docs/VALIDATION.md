@@ -1,6 +1,50 @@
 # Integrationsprüfung – 7. Oktober 2026 (Europe/Berlin)
 
-## Automatisiert
+## Aktualisierung v0.3.0: verpflichtende Sandbox
+
+Die unten dokumentierten frühen Versuche ohne Sandbox sind historisch. Die
+aktuelle Implementierung lehnt diesen Betrieb ab und prüft vor jedem Tesla-
+Aufruf einer neuen Sitzung die aktive Namespace-/PID-/Netzwerk-/Seccomp-Sandbox.
+Das neue Seccomp-Profil wurde auf dem NAS mit Chrome 155.0.8059.39 verifiziert:
+51 gebrauchte Model 3 über drei vollständige Seiten, beide Neuwagenabfragen
+gültig leer. Details und Profilherkunft stehen in `security/README.md`.
+
+Die Regressionstests umfassen jetzt 30 Node- und 36 Python-Tests; alle bestanden.
+TypeScript-Typprüfung, Build und Docker-HTTP-/Outbox-Integration bestanden.
+Ein echter Offline-Chrome-Test erbt die Produktionskonfiguration und ist ein
+zusätzliches CI-/Release-Gate. Er prüft aktive Sandbox-Schichten und weiterhin
+gesperrte Rechte; fehlender Schutz wird nicht als erfolgreicher Test behandelt.
+
+Auf Docker Desktop 29.8.2 am Apple-Silicon-Mac schlägt dieser Browser-Test unter
+AMD64-Emulation fehl: User-Namespaces werden verweigert, Chrome beendet sich beim
+Start. Das ist kein erfolgreicher lokaler Browser-Test. Die Produktionsfreigabe
+erfordert deshalb die Prüfung auf dem nativen AMD64-Zielhost.
+
+Die integrierte Produktionsversion hat diese NAS-Prüfung anschließend bestanden:
+
+- `sandbox_check.py` im neuen Produktionsimage erfolgreich; alle vier Sandbox-
+  Statuswerte wahr, weiterhin gesperrte Rechte geprüft.
+- Echter TypeScript-Client: 51 gebrauchte Model 3 vollständig normalisiert;
+  beide Neuwagenmodelle mit vollständigen gültigen Leerantworten.
+- Alle 36 Python-Tests zusätzlich im Produktionsimage unter Python 3.13 bestanden.
+- Vier Benutzerprofile formal gültig; freigegebenen Code `PREMIUM_WHITE` ergänzt.
+- Je eine ausdrücklich freigegebene Test-Störungsmeldung von Telegram und dem
+  SMTP-Server angenommen. Dies beweist nicht die Anzeige im E-Mail-Posteingang.
+- Zugangsdaten ausschließlich nach ausdrücklicher Freigabe per SSH übertragen;
+  `.env` und Profile mit Modus 600, Statusverzeichnis mit Modus 700.
+- Produktiver Watcher am 7. Oktober 2026 auf dem NAS gestartet, mehrere erfolgreiche
+  Prüfzyklen ohne Abruffehler oder wartende Nachrichten. Beide Dienste `healthy`.
+- Kontrollierter Watcher-Neustart erfolgreich; danach weiterer vollständiger Poll.
+  Beide Dienste verwenden `unless-stopped`. UGOS-Dienst `docker_serv.service` ist
+  aktiviert und zieht `docker.socket` nach; globale Dienstkonfiguration unverändert.
+- Scraper-Image: `sha256:317896fa655bdfe9ba33c1ae0f2fd505244004b911df5cc769b445ce3cb56e9d`.
+- Watcher-Image: `sha256:1337dc904340c7652172b1416454162aa23df0515eba729548206bcf88c238d8`.
+- Kein 24-Stunden-Dauertest und kein tatsächlicher NAS-Neustart durchgeführt.
+- Externe Überwachung eines vollständigen NAS-/Internetausfalls bleibt offen.
+
+## Historischer Stand v0.2.0
+
+### Automatisiert
 
 - TypeScript-Typprüfung für Anwendung **und** Tests erfolgreich.
 - 29 Node-Tests erfolgreich.
@@ -12,7 +56,7 @@
 - Das Docker-Testnetz hatte keinen Internetzugang. Keine echte Nachricht wurde gesendet.
 - Produktionsimages für Linux AMD64 gebaut; Compose-Konfiguration validiert.
 
-## Live auf dem UGREEN-NAS
+### Live auf dem UGREEN-NAS
 
 Testumgebung: Linux AMD64, Docker 29.6.2, Chrome 155.0.8059.39 auf Xvfb.
 Nicht-root, read-only Dateisystem, keine Linux-Capabilities, no-new-privileges,
@@ -40,7 +84,7 @@ vor. Der erste Dienstentwurf lehnte dies ab. Die korrigierte Implementierung
 übernimmt Markt/Modell/Zustand, entfernt die impliziten Filter und lädt alle
 exakten Seiten der Deutschland-Abfrage. Das Verhalten ist durch Tests abgesichert.
 
-## Noch nicht freigegeben / nicht nachgewiesen
+### Damals noch nicht freigegeben / nicht nachgewiesen
 
 - Kein 24-Stunden-Dauertest. `soak.py` ist dafür vorbereitet, aber nicht automatisch gestartet.
 - Kein dauerhafter Produktionsdienst aktiviert.

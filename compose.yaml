@@ -1,6 +1,6 @@
 services:
   scraper:
-    image: ${SCRAPER_IMAGE:-tesla-inventory-checker-scraper:0.2.0}
+    image: ${SCRAPER_IMAGE:-tesla-inventory-checker-scraper:0.3.0}
     build:
       context: ./scraper
     platform: linux/amd64
@@ -10,7 +10,9 @@ services:
       BROWSER_NO_SANDBOX: ${BROWSER_NO_SANDBOX:-false}
       SESSION_MAX_AGE_SECONDS: ${SESSION_MAX_AGE_SECONDS:-1800}
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/chrome-seccomp.json
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,size=512m,mode=1777
@@ -18,6 +20,7 @@ services:
     shm_size: 256m
     mem_limit: 2g
     cpus: 2
+    pids_limit: 256
     stop_grace_period: 30s
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
@@ -25,7 +28,7 @@ services:
       timeout: 5s
       retries: 3
   watcher:
-    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.2.0}
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.3.0}
     build: .
     init: true
     restart: unless-stopped
@@ -54,7 +57,7 @@ services:
       start_period: 30s
   live-check:
     profiles: [tools]
-    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.2.0}
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.3.0}
     build: .
     command: [node, dist/live-check.js]
     environment:

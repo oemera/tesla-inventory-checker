@@ -1,0 +1,10 @@
+# Real Chrome, no Internet, no credentials, no production state.
+# Inherit the production service so the security settings cannot drift silently.
+services:
+  sandbox-check:
+    extends:
+      file: compose.yaml
+      service: scraper
+    restart: "no"
+    network_mode: none
+    command: [python, sandbox_check.py]

@@ -19,3 +19,10 @@ test("matches aliases, accents and price limit", () => {
   assert.equal(matchVehicle(profile, { ...vehicle, priceEur: 55001 }), undefined);
   assert.equal(matchVehicle(profile, { ...vehicle, interiorColor: "Weiß" }), undefined);
 });
+
+test("white interior uses the exact Tesla code without matching unrelated interiors", () => {
+  const whiteProfile = {...profile, interiorColors: ["Weiß", "White", "PREMIUM_WHITE"]};
+  assert.ok(matchVehicle(whiteProfile, {...vehicle, interiorColor: "Interieur schwarz und weiß", interiorCode: "PREMIUM_WHITE"}));
+  assert.equal(matchVehicle(whiteProfile, {...vehicle, interiorColor: "Interieur schwarz und weiß"}), undefined);
+  assert.equal(matchVehicle(whiteProfile, {...vehicle, interiorCode: "PREMIUM_BLACK"}), undefined);
+});

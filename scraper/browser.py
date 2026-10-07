@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 from inventory import InventoryError, collect_pages, countrywide_template, retry_after
+from sandbox import require_sandbox, verify_browser_sandbox
 
 
 class BrowserInventory:
@@ -24,6 +25,7 @@ class BrowserInventory:
         self.lock = asyncio.Lock()
         self.last_success = None
         self.last_error = None
+        self.sandbox_status = None
 
     async def close(self):
         if self.browser:
@@ -44,10 +46,25 @@ class BrowserInventory:
             self.temp.cleanup()
             self.temp = None
         self.templates.clear()
+        self.sandbox_status = None
 
-    async def start(self):
-        import nodriver as uc
+    async def start(self, *, warmup=True):
+        require_sandbox()
         await self.close()
+        try:
+            await self._launch()
+            self.sandbox_status = await verify_browser_sandbox(self.browser)
+            if warmup:
+                await self.browser.get('https://www.tesla.com/de_DE')
+                await asyncio.sleep(5)
+            self.created = time.monotonic()
+            self.generation += 1
+        except BaseException:
+            await self.close()
+            raise
+
+    async def _launch(self):
+        import nodriver as uc
         self.temp = tempfile.TemporaryDirectory(prefix='tesla-session-', ignore_cleanup_errors=True)
         environment = dict(os.environ, DISPLAY=':99')
         self.display = await asyncio.create_subprocess_exec(
@@ -61,8 +78,6 @@ class BrowserInventory:
                    f'--user-data-dir={self.temp.name}/profile', f'--remote-debugging-port={port}',
                    '--remote-debugging-address=127.0.0.1', '--no-first-run',
                    '--no-default-browser-check', '--window-size=1280,900']
-        if os.getenv('BROWSER_NO_SANDBOX', 'false') == 'true':
-            command.append('--no-sandbox')
         self.chrome = await asyncio.create_subprocess_exec(
             *command, 'about:blank', env=environment, stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
@@ -83,10 +98,6 @@ class BrowserInventory:
         else:
             raise InventoryError('browser_start_timeout')
         self.browser = await uc.start(host='127.0.0.1', port=port)
-        await self.browser.get('https://www.tesla.com/de_DE')
-        await asyncio.sleep(5)
-        self.created = time.monotonic()
-        self.generation += 1
 
     async def prepare(self, query):
         import nodriver as uc

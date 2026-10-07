@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends xvfb wget ca-ce
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && useradd --create-home --uid 10001 scraper
-COPY inventory.py browser.py server.py smoke.py soak.py ./
+COPY inventory.py browser.py sandbox.py sandbox_check.py server.py smoke.py soak.py ./
 USER scraper
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 CMD ["python", "server.py"]

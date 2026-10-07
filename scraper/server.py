@@ -34,7 +34,8 @@ def handler_for(backend, loop):
         def do_GET(self):
             url = urlparse(self.path)
             if url.path == '/health':
-                return self.reply(200, dict(alive=True, lastSuccess=backend.last_success, lastError=backend.last_error))
+                return self.reply(200, dict(alive=True, lastSuccess=backend.last_success, lastError=backend.last_error,
+                                           sandbox=getattr(backend, 'sandbox_status', None)))
             if url.path != '/inventory':
                 return self.reply(404, dict(error='not_found'))
             future = None
