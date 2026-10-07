@@ -1,14 +1,70 @@
 services:
+  scraper:
+    image: ${SCRAPER_IMAGE:-tesla-inventory-checker-scraper:0.2.0}
+    build:
+      context: ./scraper
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    environment:
+      BROWSER_NO_SANDBOX: ${BROWSER_NO_SANDBOX:-false}
+      SESSION_MAX_AGE_SECONDS: ${SESSION_MAX_AGE_SECONDS:-1800}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=512m,mode=1777
+      - /home/scraper:rw,nosuid,size=32m,uid=10001,gid=10001
+    shm_size: 256m
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
   watcher:
-    image: ghcr.io/CHANGE-ME/tesla-inventory-checker:latest
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.2.0}
+    build: .
+    init: true
     restart: unless-stopped
     env_file: .env
+    environment:
+      INVENTORY_PROVIDER: ${INVENTORY_PROVIDER:-browser}
+      SCRAPER_URL: http://scraper:8080
     volumes:
       - ./profiles.json:/app/config/profiles.json:ro
       - ./state:/app/state
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 512m
+    cpus: 1
+    stop_grace_period: 4m
+    depends_on:
+      scraper:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "/app/dist/healthcheck.js"]
+      test: [CMD, node, /app/dist/healthcheck.js]
       interval: 1m
       timeout: 10s
       retries: 3
       start_period: 30s
+  live-check:
+    profiles: [tools]
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.2.0}
+    build: .
+    command: [node, dist/live-check.js]
+    environment:
+      INVENTORY_PROVIDER: browser
+      SCRAPER_URL: http://scraper:8080
+      LIVE_MODEL: ${LIVE_MODEL:-m3}
+      LIVE_CONDITION: ${LIVE_CONDITION:-new}
+    depends_on:
+      scraper:
+        condition: service_healthy
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true

@@ -23,6 +23,7 @@ function validateProfile(value: unknown): Profile {
   if (!isObject(value)) throw new Error("Each profile must be an object.");
   const id = requireString(value, "id");
   const market = requireString(value, "market").toLowerCase();
+  if (market !== "de") throw new Error(`${id}: only the German market (de) is supported.`);
   const model = requireString(value, "model").toLowerCase();
   const condition = requireString(value, "condition").toLowerCase();
   if (!allowedModels.has(model)) throw new Error(`${id}: model must be m3 or my.`);

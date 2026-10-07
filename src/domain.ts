@@ -31,6 +31,10 @@ export interface Vehicle {
   id: string;
   vin?: string;
   model: Model;
+  condition?: Condition;
+  trimCode?: string;
+  exteriorCode?: string;
+  interiorCode?: string;
   trim?: string;
   exteriorColor?: string;
   interiorColor?: string;
@@ -48,3 +52,5 @@ export interface Match {
 export interface InventoryGateway {
   fetchInventory(query: InventoryQuery): Promise<unknown[]>;
 }
+
+export type Channel = "telegram" | "email";

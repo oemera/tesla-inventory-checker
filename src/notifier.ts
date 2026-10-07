@@ -1,8 +1,9 @@
 import nodemailer from "nodemailer";
-import type { Match, Profile } from "./domain.js";
+import type { Channel, Match, Profile } from "./domain.js";
 
 export interface AlertSender {
   sendMatch(match: Match): Promise<void>;
+  sendChannel(match: Match, channel: Channel): Promise<void>;
   sendTechnicalError(message: string): Promise<void>;
 }
 
@@ -22,6 +23,12 @@ export interface NotificationSettings {
 
 export class Notifier implements AlertSender {
   constructor(private readonly settings: NotificationSettings) {}
+
+  async sendChannel(match: Match, channel: Channel): Promise<void> {
+    const body = formatMatch(match);
+    if (channel === "telegram") await this.sendTelegram(body);
+    else await this.sendEmail(`Tesla-Treffer: ${match.profile.id}`, body);
+  }
 
   async sendMatch(match: Match): Promise<void> {
     const body = formatMatch(match);
@@ -62,6 +69,8 @@ export class Notifier implements AlertSender {
       signal: AbortSignal.timeout(15_000)
     });
     if (!response.ok) throw new Error(`Telegram notification failed: HTTP ${response.status}`);
+    const result = await response.json() as {ok?: boolean};
+    if (result.ok !== true) throw new Error("Telegram rejected the message.");
   }
 
   private async sendEmail(subject: string, text: string): Promise<void> {
@@ -71,6 +80,9 @@ export class Notifier implements AlertSender {
       host: smtp.host,
       port: smtp.port,
       secure: smtp.secure,
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 20_000,
       auth: smtp.user && smtp.password ? { user: smtp.user, pass: smtp.password } : undefined
     });
     await transporter.sendMail({ from: smtp.from, to: smtp.to, subject, text });
@@ -97,7 +109,7 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv): NotificationSettings {
 function formatMatch(match: Match): string {
   const vehicle = match.vehicle;
   const details = [
-    `🚗 Neuer Treffer: ${match.profile.id}`,
+    `${vehicle.id === "TEST-NOTIFICATION-ONLY" ? "🧪 TEST – kein echtes Fahrzeug" : "🚗 Neuer Treffer"}: ${match.profile.id}`,
     vehicle.trim && `Variante: ${vehicle.trim}`,
     vehicle.exteriorColor && `Lack: ${vehicle.exteriorColor}`,
     vehicle.interiorColor && `Innenraum: ${vehicle.interiorColor}`,
@@ -105,7 +117,7 @@ function formatMatch(match: Match): string {
     vehicle.location && `Standort: ${vehicle.location}`,
     vehicle.vin && `VIN: ${vehicle.vin}`,
     "",
-    "Direkt bei Tesla ansehen:",
+    vehicle.orderUrl.includes("/inventory/") ? "Tesla-Inventarseite (kein Fahrzeug-Direktlink):" : "Fahrzeug bei Tesla ansehen:",
     vehicle.orderUrl
   ];
   return details.filter((value): value is string => Boolean(value)).join("\n");

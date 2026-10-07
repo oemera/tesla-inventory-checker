@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+profiles.json
+state
+node_modules
+dist
+**/__pycache__
+.venv
+coverage

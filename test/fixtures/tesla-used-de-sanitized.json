@@ -1,0 +1,18 @@
+{
+  "VIN": "LRW3E7FA8PC000001",
+  "Model": "m3",
+  "CountryCode": "DE",
+  "TrimName": "Standard Plus Hinterradantrieb",
+  "TRIM": ["M3RWD"],
+  "PAINT": ["WHITE"],
+  "INTERIOR": ["PREMIUM_WHITE"],
+  "InventoryPrice": 25200,
+  "PurchasePrice": 25200,
+  "OptionCodeList": "$IN3BW,$PPSW,$MT308",
+  "OptionCodeSpecs": {"C_DESIGN": {"code": "C_DESIGN", "name": "Design", "options": []}},
+  "OptionCodeData": [
+    {"code": "$IN3BW", "description": "Interieur schwarz und weiß", "group": "INTERIOR", "long_name": "Partieller Premium-Interieur schwarz und weiß", "name": "Interieur schwarz und weiß", "price": 1200},
+    {"code": "$PPSW", "description": "Pearl White", "group": "PAINT", "long_name": "Pearl White-Lackierung", "name": "Pearl White Multi-Coat"},
+    {"code": "$MT308", "description": "Standard Plus Hinterradantrieb", "group": "TRIM", "long_name": "Model 3 Standard Plus, Hinterradantrieb", "name": "Standard Plus Hinterradantrieb", "price": 5000}
+  ]
+}

@@ -1,91 +1,229 @@
 # Tesla Inventory Checker
 
-Self-hosted watcher for new Tesla inventory in Germany. It polls Tesla through [`tesla-inventory`](https://github.com/teslahunt/inventory), matches saved vehicle profiles, and sends a Telegram and/or SMTP email notification only for a previously unseen matching vehicle.
+Selbst gehosteter Bestandsprüfer für Tesla Model 3 / Model Y in Deutschland.
+Zwei Docker-Dienste laufen gemeinsam auf einem Linux-AMD64-Host, insbesondere
+dem getesteten UGREEN-NAS am Heimanschluss:
 
-It does not authenticate to Tesla, purchase, reserve, solve challenges, or bypass Tesla protections.
+1. **scraper**: Python, Chrome auf Xvfb, `nodriver` und `curl_cffi`; liefert vollständige Bestandsantworten.
+2. **watcher**: TypeScript; Profile, SQLite und dauerhafte Versandaufträge für Telegram/SMTP.
 
-## How it works
+Kein angeschlossener Bildschirm, Tesla-Konto oder Login erforderlich. Keine
+Reservierungen, Käufe, CAPTCHA-Lösung oder Proxy-Rotation. Der Ansatz orientiert
+sich an [TeslaWebScrape](https://github.com/JumpBearCode/TeslaWebScrape); das
+undokumentierte Tesla-Format und die Erreichbarkeit können sich jederzeit ändern.
+Der VPS war in unseren Tests blockiert; nativer Chrome-Headless-Modus ebenfalls.
+Die NAS-Ergebnisse sind keine Garantie für dauerhaften Zugang oder Lieferung 2026.
 
-1. One inventory request is made per unique market/model/condition combination; multiple profiles with the same Model 3 query do not multiply Tesla traffic.
-2. The response is normalised to a stable internal vehicle structure.
-3. Trim, exterior paint, interior, and maximum price are checked against each profile.
-4. A local SQLite database records each profile/VIN pair.
-5. The first successful run is a quiet baseline by default. Later matching vehicles produce one alert with Tesla's order URL.
+## Ablauf und Grenzen
 
-The polling default is 60 seconds, with up to ten seconds of jitter. Do not lower it below 30 seconds. Tesla may change its undocumented inventory endpoint or restrict automated traffic; use responsibly and review Tesla's applicable terms.
+- Eine vollständige Abfrage pro Markt/Modell/Zustand, gemeinsam für alle passenden Profile.
+- Mindestens 60 Sekunden Pause nach einem Zyklus plus 0–10 Sekunden Zufallsaufschlag; keine überlappenden Zyklen.
+- Browser und Cookies werden wiederverwendet. Nach standardmäßig 30 Minuten wird eine neue Sitzung erzeugt; das ist eine Betriebsgrenze, keine behauptete Cookie-Lebensdauer.
+- Ein API-401/403 erlaubt höchstens eine Sitzungserneuerung. Bleibt der Fehler bestehen, Pause. Eine im Browser erkannte Sperre wird sofort als Fehler behandelt.
+- HTTP 429 respektiert `Retry-After`; andere Fehler erhalten steigende Wartezeiten. Keine Neustartschleifen bei Tesla-Sperren.
+- Alle exakten Ergebnisseiten werden geladen. Doppelte VINs, wechselnde Trefferzahlen oder unvollständige Seiten machen den Abruf ungültig. Keine Aktualisierung der Erstaufnahme aus Teilantworten.
+- Die Webseite kann ungefragt Baujahre und Postleitzahlen vorbelegen. Diese Filter werden vor der Deutschland-Abfrage entfernt; Profilfilter prüft ausschließlich der Watcher.
+- `approximate` / `approximateOutside` sind ausdrücklich keine exakten Treffer und werden nicht übernommen.
+- Ein erfolgreicher leerer Bestand bleibt von Zugriffssperren und Schemafehlern unterscheidbar.
+- Keine freie Ziel-URL in der Abrufschnittstelle; nur Deutschland, m3/my und new/used.
 
-### Verify the source before enabling alerts
+## Profile
 
-The direct Tesla inventory API is undocumented. Before enabling the worker on the VPS, run the following from the checked-out release (or inside the image) to verify that the VPS can read Germany's current data:
+`profiles.example.json` ist ein Ausgangspunkt, keine verifizierte Liste aktueller
+Tesla-Verkaufsbezeichnungen. Kopiere sie nach `profiles.json` und passe sie an.
+Alle belegten Filter müssen passen. Einträge innerhalb einer Liste sind Alternativen.
 
-```sh
-npm run build
-npm run live-check
-```
+Die Filter vergleichen vollständige normalisierte Bezeichnungen oder exakte
+Tesla-Optionscodes. Es gibt **keine Teilstring-Suche**: `AWD` ist nicht automatisch
+`Premium AWD`, `Grau` nicht automatisch `Stealth Grey`, `Black` nicht `Black and White`.
+Fehlende Merkmale ergeben bei einem entsprechenden Filter keinen Treffer.
+`OptionCodeData` wird mit der ausgewählten `OptionCodeList` abgeglichen;
+`OptionCodeSpecs` wird nur für den tatsächlich ausgewählten Code ausgewertet.
+Unbekannte Codes werden nicht als bekannte Ausstattungen geraten.
 
-If Tesla returns `HTTP 403`, the VPS is blocked from the direct endpoint. The application deliberately does **not** attempt to bypass Tesla challenges or bot protection. It will log the failure and send a technical alert after three consecutive failures. In that case, stop the worker and use a permitted data source or review the approach manually; do not increase the polling rate.
+Verwende tatsächliche Antwortfelder zur Pflege der Profile. Für Diagnose ohne
+VIN-/Cookie-Ausgabe gibt es `smoke.py --sample-schema`. Für neue Varianten müssen
+repräsentative Neuwagendaten die Zuordnung bestätigen; ein leerer Bestand genügt nicht.
 
-### Verify Telegram and email safely
+## Einrichtung auf dem NAS
 
-After configuring `.env` and `profiles.json`, use the one-shot notification check. It sends a clearly labeled synthetic test vehicle and never contacts Tesla or writes the SQLite state.
+Docker und Docker Compose müssen installiert sein. Der SSH-Benutzer braucht
+Docker-Zugriff; die Docker-Gruppe verleiht praktisch Administratorrechte.
+SSH nur im Heimnetz/VPN freigeben. Kein Router-Portforwarding nötig.
 
-```sh
-npm run build
-npm run test-notification
-```
-
-Inside the Docker image, run the same command as `node dist/test-notification.js` with your `.env` file and profile mounted.
-
-## Configure
-
-Copy the examples on the deployment host. Keep the real files out of Git.
+Repository auf dem NAS auschecken; danach im Projektverzeichnis:
 
 ```sh
 cp .env.example .env
 cp profiles.example.json profiles.json
-mkdir state
+mkdir -p state
 chmod 600 .env
 ```
 
-Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for Telegram. Create the bot with BotFather and first send it a message. For email, set the SMTP values and use an app password where your provider supports it.
+Der Watcher läuft als UID 1000; `state` muss für diese UID beschreibbar sein.
+Nur diesen neu angelegten Projektordner entsprechend berechtigen, keine NAS-Freigaben
+rekursiv umkonfigurieren. Bestehende `.env`, Profile oder Datenbanken nicht überschreiben.
 
-Every enabled profile must have at least one enabled notification channel whose credentials are configured. A profile is only notified when all populated filters match. Add Tesla's exact current labels as aliases; the defaults are examples and Tesla can rename trims, paints, and interiors.
+Konfiguration in `.env`:
 
-`NOTIFY_ON_FIRST_SEEN=false` is deliberately the default: current stock becomes the baseline instead of creating a burst of old alerts. Set it to `true` for the first production run only if you want every already-available match reported.
+| Variable | Standard / Zweck |
+| --- | --- |
+| `INVENTORY_PROVIDER` | `browser`; `direct` ausdrücklich auswählbarer alter Adapter, kein automatischer Fallback |
+| `POLL_INTERVAL_SECONDS` | `60`, Minimum 60 |
+| `SESSION_MAX_AGE_SECONDS` | `1800` |
+| `BROWSER_NO_SANDBOX` | `false`, siehe Sicherheitsentscheidung unten |
+| `NOTIFY_ON_FIRST_SEEN` | `false`: erste vollständige Aufnahme bleibt still |
+| `TECHNICAL_ALERTS` | `false`: nur Fahrzeugmeldungen; optional gebündelte Abruf-Störungsmeldungen |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Nur an den Watcher übergeben |
+| `SMTP_*`, `EMAIL_FROM`, `EMAIL_TO` | Optionaler E-Mail-Kanal |
+| `WATCHER_IMAGE`, `SCRAPER_IMAGE` | Veröffentlichte, zusammengehörige Release-Tags |
 
-## Run on a VPS
+Aktiviere in den Profilen nur Kanäle, für die Zugangsdaten vorhanden sind.
+Zugangsdaten, reale Profile, Browserdaten und SQLite sind aus Git und Docker-Builds
+ausgeschlossen. Bereits öffentlich geteilte Bot-Tokens vor Produktion rotieren.
 
-Before the first deployment, edit `compose.yaml` and replace `CHANGE-ME` with your lowercase GitHub owner or organisation. The project publishes its release images to GHCR after a Git tag such as `v0.1.0`.
+### Sicherheitsentscheidung: Chrome-Sandbox
+
+Die Standardkonfiguration lässt die Browser-Sandbox aktiviert. Der ursprüngliche
+erfolgreiche Einmaltest benötigte `--no-sandbox`. Wenn `browser_start_failed`
+auftritt, zuerst die Browser-Sandbox/Host-Kompatibilität prüfen.
+
+`BROWSER_NO_SANDBOX=true` ist eine **ausdrückliche Risikoentscheidung**, kein
+stiller automatischer Fallback. Der Browser verliert dabei eine Schutzschicht
+gegen schädliche Webseiten. Nicht-root, fehlende Linux-Capabilities, read-only
+Dateisystem, temporäres Browserprofil und Ressourcenlimits begrenzen das Risiko,
+ersetzen die Chrome-Sandbox aber nicht. Niemals `privileged`, den Docker-Socket,
+private NAS-Verzeichnisse oder Host-Netzwerk hinzufügen, um den Start zu erzwingen.
+
+Der Scraper erhält keine SMTP-/Telegram-Secrets, keine dauerhaften Volumes und
+keine veröffentlichten Ports. Beide Dienste benötigen ausgehenden Internetzugang.
+
+## Zuerst ohne Benachrichtigungen testen
+
+Lokal auf dem NAS bauen (alternativ Release-Images ziehen):
 
 ```sh
-docker compose pull
-docker compose up -d
-docker compose logs -f watcher
+docker compose build
+docker compose up -d scraper
+docker compose run --rm live-check
 ```
 
-The service exposes no network port. It needs persistent write access only to `./state`; the configuration is mounted read-only. Pin the image in `compose.yaml` to a release version such as `:0.1.0` once the initial deployment works, rather than relying permanently on `:latest`.
+`live-check` hat keine Benachrichtigungszugänge und keinen SQLite-Mount. Es verändert
+die produktive Erstaufnahme nicht. Andere Kontrollabfragen:
 
-For a private GHCR package, log the VPS into `ghcr.io` with a GitHub token that has package-read access before calling `docker compose pull`.
+```sh
+docker compose run --rm -e LIVE_MODEL=m3 -e LIVE_CONDITION=used live-check
+docker compose run --rm -e LIVE_MODEL=my -e LIVE_CONDITION=new live-check
+docker compose exec scraper python smoke.py --model m3 --condition used --sample-schema
+```
 
-## Development and tests
+Nach erfolgreicher Prüfung bewusst den Watcher aktivieren:
 
-Node 22.13 or later is required because persistence uses Node's built-in SQLite module.
+```sh
+docker compose up -d watcher
+docker compose logs --tail=100 watcher
+docker compose exec watcher node dist/status.js
+```
+
+Healthchecks prüfen Prozess-Lebendigkeit. Eine Tesla-Sperre soll keinen
+Restart-Sturm auslösen. Der Zustand der Datenquelle ist getrennt sichtbar über
+`status.js` (letzter erfolgreicher Poll, Versandwarteschlange) und Scraper `/health`
+(letzter erfolgreicher Abruf, Fehlercode). Eine grüne Containeranzeige allein
+beweist keine aktuellen Fahrzeugdaten.
+
+Ein separat gestarteter, begrenzter Dauertest bleibt ohne echte Meldungen:
+
+```sh
+docker compose exec scraper python soak.py --cycles 1440 --interval 60
+```
+
+Er prüft m3 gebraucht als Positivkontrolle sowie beide Neuwagenabfragen, respektiert
+Fehlerpausen und dauert wegen Abrufzeiten mindestens etwa 24 Stunden. Nicht parallel
+zum produktiven Watcher betreiben. Er startet nicht automatisch bei Installation.
+
+## Benachrichtigungen und SQLite
+
+Treffer und Versandaufträge werden pro vollständiger Abfrage atomar gespeichert.
+Telegram und E-Mail haben getrennte Zustände. Fehler werden mit 30 Sekunden bis
+maximal einer Stunde Abstand erneut versucht, auch wenn später Tesla-Abrufe scheitern.
+Ein verschwundenes Fahrzeug bleibt als bereits beobachteter Treffer in der Warteschlange;
+Verfügbarkeit deshalb beim Öffnen des Links erneut prüfen.
+
+Der Status `sent` wird erst nach erfolgreicher Kanalantwort gesetzt. Bei einem
+Absturz zwischen externer Annahme und lokaler Bestätigung sind Doppelmeldungen
+möglich (At-least-once, nicht Exactly-once).
+
+Geänderte Profile erhalten eine neue Erstaufnahme; wartende Aufträge alter oder
+deaktivierter Profile werden verworfen. Profile werden beim Prozessstart geladen:
+nach Änderungen `docker compose restart watcher`. Mit
+`NOTIFY_ON_FIRST_SEEN=true` werden vorhandene Treffer beim ersten Durchlauf einer
+neuen Profilversion gemeldet. Ein späteres Umschalten spielt bereits still
+aufgenommene Fahrzeuge nicht erneut ab.
+
+Schema v2 ergänzt die Versandwarteschlange. Vor dem Upgrade einer vorhandenen
+Datenbank entsteht automatisch ein konsistentes `*.pre-v2-*.sqlite`-Backup.
+Frühere Sendemarkierungen und stille Erstaufnahmen werden konservativ erhalten.
+Fehlgeschlagene v1-Sendungen sind nicht von still beobachteten Fahrzeugen
+unterscheidbar und werden bei der Migration nicht nachträglich geraten.
+Genau **eine Watcher-Instanz je Datenbank** betreiben.
+
+Der explizite Nachrichtentest sendet ein synthetisches Testfahrzeug und fragt
+Tesla nicht ab:
+
+```sh
+docker compose run --rm --no-deps watcher node dist/test-notification.js
+```
+
+## Entwicklung und Tests
+
+Node >=22.13, Python 3.13 für die Produktionsumgebung; die Python-Unit-Tests
+benötigen nur die Standardbibliothek. CI fragt Tesla nicht ab und sendet keine Nachrichten.
 
 ```sh
 npm ci
 npm run check
 npm test
+npm run test:python
 npm run build
-docker build --tag tesla-inventory-checker:test .
+docker compose -p tesla-tests -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from integration
+docker compose -p tesla-tests -f compose.test.yaml down --volumes
 ```
 
-The test suite covers configuration validation, the `tesla-inventory` adapter contract for Germany, raw Tesla-response normalisation, profile matching, the SQLite deduplication path, and the quiet-first-run/new-VIN notification behaviour. Fixtures are local; CI never contacts Tesla.
+Der Docker-Test läuft auf einem Netzwerk ohne Internetzugang. Er verbindet die
+echte Python-HTTP-Grenze, TypeScript-Normalisierung, Filter und SQLite mit
+kontrollierten Inventardaten und simulierten Nachrichtensendern. Die Fixture-
+Implementierung wird nicht in das Produktionsimage kopiert.
 
-When Tesla changes its response format, add a sanitised fixture that represents the new response, update `src/normalize.ts`, and make the test demonstrate the expected normalized fields before releasing an image.
+## Releases, Updates und Rückwechsel
 
-## Release process
+Ein Tag wie `v0.2.0` führt zuerst Tests aus und veröffentlicht dann zwei AMD64-Images:
 
-1. Merge a tested change into `main`.
-2. Create and push a version tag, e.g. `v0.1.0`.
-3. GitHub Actions builds and publishes `ghcr.io/<owner>/tesla-inventory-checker:0.1.0` for Linux AMD64.
-4. Change the image tag in the VPS `compose.yaml`, then run `docker compose pull && docker compose up -d`.
+- `ghcr.io/<owner>/<repository>:0.2.0`
+- `ghcr.io/<owner>/<repository>-scraper:0.2.0`
+
+Compose verwendet zunächst lokale Image-Namen für `docker compose build`.
+Für Releases die beiden Image-Variablen in `.env` auf die GHCR-Namen setzen.
+Private GHCR-Pakete benötigen `docker login ghcr.io`
+mit Leseberechtigung. Niemals Tokens in das Repository schreiben.
+
+Auf dem NAS:
+
+```sh
+docker compose pull
+docker compose up -d scraper
+docker compose run --rm live-check
+docker compose up -d watcher
+```
+
+Beide Image-Versionen gemeinsam aktualisieren. Für einen rollbackfähigen Datenstand
+den Watcher vorher stoppen und `state` sichern. Bei einem Rückwechsel auf v1 **auch
+das vor der Migration gesicherte Datenbankabbild wiederherstellen**, nicht die neue
+Datenbank mit dem alten Programm weiterverwenden. Währenddessen entstandene
+Versandzustände gehen beim Rückwechsel verloren; Doppelmeldungen sind möglich.
+
+Chrome wird beim Build auf die freigegebene Version geprüft. Liefert Google eine
+andere Version, schlägt ein frischer Build absichtlich fehl, statt ungetestet zu
+aktualisieren. Die neue Version bewusst freigeben und auf dem Zielhost testen.
+Release-Images sind die reproduzierbaren Deployment-Artefakte; Debian-Paketquellen
+und der Chrome-Download sind kein langfristiges Quellarchiv. Die direkten und
+transitiven Python-Abhängigkeiten sind festgelegt.

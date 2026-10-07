@@ -16,6 +16,7 @@ class FakeGateway implements InventoryGateway {
 class RecordingNotifier implements AlertSender {
   public matches: Match[] = [];
   async sendMatch(match: Match): Promise<void> { this.matches.push(match); }
+  async sendChannel(match: Match): Promise<void> { this.matches.push(match); }
   async sendTechnicalError(_message: string): Promise<void> {}
 }
 

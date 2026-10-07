@@ -17,7 +17,7 @@ test("normalizes a saved Tesla inventory fixture", async () => {
     location: vehicle.location,
     orderUrl: vehicle.orderUrl
   }, {
-    id: "inventory-123456",
+    id: "LRW3E7FA8PC123456",
     vin: "LRW3E7FA8PC123456",
     model: "m3",
     trim: "Premium Allradantrieb",
@@ -36,4 +36,16 @@ test("rejects an inventory item without a stable identifier", () => {
 test("accepts a text value nested in a Tesla option array", () => {
   const vehicle = normalizeVehicle({ VIN: "LRW3E7FA8PC000001", PAINT: ["Stealth Grey"] }, { market: "de", model: "m3", condition: "new" });
   assert.equal(vehicle?.exteriorColor, "Stealth Grey");
+});
+
+test("normalizes the sanitized live German option-data fixture", async () => {
+  const raw = JSON.parse(await readFile(new URL("./fixtures/tesla-used-de-sanitized.json", import.meta.url), "utf8"));
+  const vehicle = normalizeVehicle(raw, {market:"de", model:"m3", condition:"used"})!;
+  assert.equal(vehicle.trim, "Standard Plus Hinterradantrieb");
+  assert.equal(vehicle.exteriorColor, "Pearl White Multi-Coat");
+  assert.equal(vehicle.interiorColor, "Interieur schwarz und weiß");
+  assert.equal(vehicle.exteriorCode, "WHITE");
+  assert.equal(vehicle.orderUrl, "https://www.tesla.com/de_DE/inventory/used/m3");
+  raw.OptionCodeList = "$MT308";
+  assert.equal(normalizeVehicle(raw, {market:"de", model:"m3", condition:"used"})?.exteriorColor, "WHITE");
 });

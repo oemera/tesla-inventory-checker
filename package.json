@@ -1,6 +1,6 @@
 {
   "name": "tesla-inventory-checker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Self-hosted Tesla Germany inventory watcher with Telegram and email alerts.",
   "type": "module",
@@ -14,7 +14,9 @@
     "live-check": "node dist/live-check.js",
     "test-notification": "node dist/test-notification.js",
     "test": "tsx --test test/**/*.test.ts",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test:python": "python3 -m unittest discover -s scraper -p 'test_*.py'",
+    "status": "node dist/status.js"
   },
   "dependencies": {
     "debug-logfmt": "^1.4.15",

@@ -1,0 +1,23 @@
+services:
+  fixture:
+    build:
+      context: ./scraper
+      target: fixture
+    platform: linux/amd64
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks: [test]
+  integration:
+    build:
+      context: .
+      target: integration
+    depends_on:
+      fixture:
+        condition: service_healthy
+    networks: [test]
+networks:
+  test:
+    internal: true

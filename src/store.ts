@@ -1,16 +1,24 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Match } from "./domain.js";
+import type { Channel, Match, Profile } from "./domain.js";
+
+export interface Delivery { id: number; channel: Channel; payload: string; attempts: number }
 
 export class Store {
   private readonly db: DatabaseSync;
 
   constructor(path: string) {
+    const existing = existsSync(path);
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
+    const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    if (version > 2) { this.db.close(); throw new Error("Database version is newer than this application."); }
+    if (existing && version < 2) this.db.prepare("VACUUM INTO ?").run(`${path}.pre-v2-${Date.now()}.sqlite`);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(`
+      BEGIN IMMEDIATE;
       CREATE TABLE IF NOT EXISTS matches (
         profile_id TEXT NOT NULL,
         vehicle_id TEXT NOT NULL,
@@ -37,7 +45,87 @@ export class Store {
         success INTEGER,
         error TEXT
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS deliveries (
+        id INTEGER PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        revision TEXT NOT NULL,
+        vehicle_id TEXT NOT NULL,
+        channel TEXT NOT NULL CHECK(channel IN ('telegram', 'email')),
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'sent', 'suppressed', 'cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt INTEGER NOT NULL DEFAULT 0,
+        sent_at TEXT,
+        UNIQUE(profile_id, revision, vehicle_id, channel)
+      ) STRICT;
+      PRAGMA user_version = 2;
+      COMMIT;
     `);
+  }
+
+  transaction(action: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try { action(); this.db.exec("COMMIT"); }
+    catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  queueMatches(profile: Profile, matches: Match[], notifyInitially: boolean): void {
+    const rev = revision(profile);
+    const baselineKey = `baseline:v2:${profile.id}:${rev}`;
+    const priorRevision = this.db.prepare("SELECT value FROM metadata WHERE key = ?").get(`revision:${profile.id}`);
+    const baseline = Boolean(this.db.prepare("SELECT 1 FROM metadata WHERE key = ?").get(baselineKey))
+      || (!priorRevision && this.isBaselineComplete(profile.id));
+    for (const match of matches) {
+      const legacySeen = !priorRevision && this.isBaselineComplete(profile.id) && Boolean(this.db.prepare(
+        "SELECT 1 FROM matches WHERE profile_id=? AND (vehicle_id=? OR json_extract(vehicle_json, '$.vin')=?)"
+      ).get(profile.id, match.vehicle.id, match.vehicle.vin ?? match.vehicle.id));
+      this.observe(match);
+      const legacySent = this.db.prepare(`SELECT 1 FROM notifications n LEFT JOIN matches m
+        ON m.profile_id=n.profile_id AND m.vehicle_id=n.vehicle_id
+        WHERE n.profile_id=? AND (n.vehicle_id=? OR json_extract(m.vehicle_json, '$.vin')=?)`).get(profile.id, match.vehicle.id, match.vehicle.vin ?? match.vehicle.id);
+      for (const channel of ["telegram", "email"] as const) {
+        if (!profile.notify[channel]) continue;
+        const status = legacySent || legacySeen || (!baseline && !notifyInitially) ? "suppressed" : "pending";
+        this.db.prepare(`INSERT OR IGNORE INTO deliveries
+          (profile_id, revision, vehicle_id, channel, payload, status) VALUES (?, ?, ?, ?, ?, ?)`)
+          .run(profile.id, rev, match.vehicle.id, channel, JSON.stringify(match), status);
+      }
+    }
+    this.db.prepare("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)").run(baselineKey, new Date().toISOString());
+    this.db.prepare("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)").run(`revision:${profile.id}`, rev);
+  }
+
+  reconcileProfiles(profiles: Profile[]): void {
+    for (const row of this.db.prepare("SELECT DISTINCT profile_id, revision FROM deliveries WHERE status='pending'").all() as Array<{profile_id: string; revision: string}>) {
+      if (!profiles.some((p) => p.enabled && p.id === row.profile_id && revision(p) === row.revision)) {
+        this.db.prepare("UPDATE deliveries SET status='cancelled' WHERE profile_id=? AND revision=? AND status='pending'").run(row.profile_id, row.revision);
+      }
+    }
+  }
+
+  pending(now = Date.now()): Delivery[] {
+    return this.db.prepare("SELECT id, channel, payload, attempts FROM deliveries WHERE status='pending' AND next_attempt<=? ORDER BY id LIMIT 10").all(now) as unknown as Delivery[];
+  }
+
+  delivered(id: number): void {
+    this.db.prepare("UPDATE deliveries SET status='sent', sent_at=? WHERE id=?").run(new Date().toISOString(), id);
+  }
+
+  retry(delivery: Delivery, now = Date.now()): void {
+    const delay = Math.min(3600, 30 * 2 ** Math.min(delivery.attempts, 7));
+    this.db.prepare("UPDATE deliveries SET attempts=attempts+1, next_attempt=? WHERE id=?").run(now + delay * 1000, delivery.id);
+  }
+
+  pendingCount(): number {
+    return (this.db.prepare("SELECT count(*) AS n FROM deliveries WHERE status='pending'").get() as {n: number}).n;
+  }
+
+  heartbeat(): void {
+    this.db.prepare("INSERT OR REPLACE INTO metadata(key,value) VALUES ('heartbeat', ?)").run(new Date().toISOString());
+  }
+
+  lastHeartbeat(): string | undefined {
+    return (this.db.prepare("SELECT value FROM metadata WHERE key='heartbeat'").get() as {value: string} | undefined)?.value;
   }
 
   close(): void {
@@ -90,4 +178,13 @@ export class Store {
     const row = this.db.prepare("SELECT finished_at FROM poll_runs WHERE success = 1 ORDER BY id DESC LIMIT 1").get() as { finished_at?: string } | undefined;
     return row?.finished_at;
   }
+}
+
+export function revision(profile: Profile): string {
+  return createHash("sha256").update(JSON.stringify({
+    market: profile.market, model: profile.model, condition: profile.condition,
+    trim: [...profile.trim ?? []].sort(), exteriorColors: [...profile.exteriorColors ?? []].sort(),
+    interiorColors: [...profile.interiorColors ?? []].sort(), maxPriceEur: profile.maxPriceEur,
+    notify: { telegram: profile.notify.telegram, email: profile.notify.email }
+  })).digest("hex").slice(0, 16);
 }

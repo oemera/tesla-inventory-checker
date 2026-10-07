@@ -1,7 +1,7 @@
 import { matchVehicle } from "./match.js";
 import { normalizeVehicle } from "./normalize.js";
 import type { AlertSender } from "./notifier.js";
-import type { AppConfig, InventoryGateway, InventoryQuery, Profile } from "./domain.js";
+import type { AppConfig, InventoryGateway, InventoryQuery, Match, Profile } from "./domain.js";
 import { Store } from "./store.js";
 
 export class Worker {
@@ -15,40 +15,57 @@ export class Worker {
 
   async runOnce(): Promise<{ fetched: number; matches: number; notified: number }> {
     const pollId = this.store.startPoll();
+    this.store.reconcileProfiles(this.config.profiles);
     try {
       let fetched = 0;
       let matches = 0;
       let notified = 0;
       const groups = groupProfiles(this.config.profiles.filter((profile) => profile.enabled));
+      let failed: unknown;
 
       for (const group of groups) {
+        try {
         const rawVehicles = await this.gateway.fetchInventory(group.query);
-        const vehicles = rawVehicles.map((raw) => normalizeVehicle(raw, group.query)).filter(isVehicle);
+        const parsed = rawVehicles.map((raw) => normalizeVehicle(raw, group.query));
+        if (parsed.some((vehicle) => vehicle === undefined)) throw new Error("invalid_vehicle_snapshot");
+        const vehicles = parsed.filter(isVehicle);
+        if (new Set(vehicles.map((v) => v.id)).size !== vehicles.length) throw new Error("duplicate_vehicle_snapshot");
         fetched += vehicles.length;
+        this.store.transaction(() => {
         for (const profile of group.profiles) {
-          const baselineComplete = this.store.isBaselineComplete(profile.id);
-          for (const vehicle of vehicles) {
-            const match = matchVehicle(profile, vehicle);
-            if (!match) continue;
-            matches += 1;
-            const seenBefore = this.store.hasSeen(profile.id, vehicle.id);
-            this.store.observe(match);
-            if ((!seenBefore && (baselineComplete || this.notifyOnFirstSeen)) && !this.store.hasNotified(profile.id, vehicle.id)) {
-              await this.notifier.sendMatch(match);
-              this.store.recordNotification(match);
-              notified += 1;
-            }
-          }
-          this.store.markBaselineComplete(profile.id);
+          const found = vehicles.map((vehicle) => matchVehicle(profile, vehicle)).filter(isVehicle);
+          matches += found.length;
+          this.store.queueMatches(profile, found, this.notifyOnFirstSeen);
+        }
+        });
+        } catch (error) {
+          // Preserve the first failure (including its cooldown) while other groups proceed.
+          failed ??= error;
         }
       }
+      notified = await this.dispatch();
+      if (failed) throw failed;
       this.store.finishPoll(pollId, true);
       return { fetched, matches, notified };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.store.finishPoll(pollId, false, message);
+      this.store.finishPoll(pollId, false, "inventory_poll_failed");
       throw error;
     }
+  }
+
+  async dispatch(): Promise<number> {
+    let sent = 0;
+    for (const delivery of this.store.pending()) {
+      try {
+        await this.notifier.sendChannel(JSON.parse(delivery.payload) as Match, delivery.channel);
+        this.store.delivered(delivery.id);
+        sent += 1;
+      } catch {
+        this.store.retry(delivery);
+        console.warn(JSON.stringify({event: "delivery_retry", channel: delivery.channel, attempt: delivery.attempts + 1}));
+      }
+    }
+    return sent;
   }
 }
 
