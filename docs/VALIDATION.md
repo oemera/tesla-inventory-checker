@@ -1,5 +1,42 @@
 # Integrationsprüfung – 7. Oktober 2026 (Europe/Berlin)
 
+## Aktualisierung v0.4.0: tägliche Bestandsberichte
+
+- 47 Node-Tests und 36 Python-Tests erfolgreich; TypeScript-Typprüfung und Build erfolgreich.
+- Neue Tests für Konfigurationsvalidierung, vier tägliche Termine, Berliner
+  Sommer-/Winterzeit, Mitternacht, begrenztes Nachholen, unfiltrierte Zählung
+  einschließlich Vorführwagen, Leerbestand versus Abruffehler, Snapshot-Cache und
+  Fehlerpausen, getrennte Telegram-/E-Mail-Wiederholung, Neustart-Deduplizierung,
+  abgelaufene/deaktivierte Sendungen und Datenbankmigration v2 → v3.
+- Telegram-/SMTP-Nachrichtenformat mit simulierten Transporten geprüft; keine
+  echten Nachrichten im Unit- oder Docker-Integrationstest.
+- Isolierter Docker-HTTP-Test ohne Internet erfolgreich, einschließlich beider
+  Bestandszahlen, beider simulierten Kanäle und Deduplizierung.
+- Produktionsimages auf Linux AMD64 festgelegt. Offline-Chrome-Test auf dem NAS
+  bestanden; Namespace-, PID-, Netzwerk- und Seccomp-Sandbox aktiv.
+- NAS-Konfiguration validiert: zwei aktuelle Premium-Suchprofile, kein Preis-,
+  Innenraum- oder Antriebsfilter. Model 3: Stealth Grey / Marine Blue; Model Y:
+  Quicksilver / Stealth Grey / Marine Blue. Beide Benachrichtigungskanäle gemäß
+  aktuellen lokalen Dateien übernommen.
+- `reports.json`: 08:00, 12:00, 16:00, 20:00 Uhr Europe/Berlin, Telegram und E-Mail.
+  Komplette deutsche Tesla-Kategorie „Neu“, keine Suchprofile oder Zusatzfilter.
+- Bestehende Zugangsdaten unverändert. `.env`, Profile und Berichtskonfiguration
+  auf dem NAS mit Modus 600; Statusverzeichnis mit Modus 700.
+- Watcher vor der Datensicherung gestoppt. Konfigurations-/Datenbanksicherung:
+  `/home/oemera/tesla-before-reports.mQPXy5`; zusätzlich automatische SQLite-
+  Sicherung `state/watcher.sqlite.pre-v3-1791405761121.sqlite`.
+- Version 0.4.0 auf dem NAS aktiviert; beide Dienste `healthy`,
+  `restart: unless-stopped`. Erster regulärer Poll erfolgreich um 22:43 Uhr.
+- Zusätzliche echte Neuwagen-Livechecks erfolgreich: Model 3 = 0, Model Y = 0;
+  gültige vollständige Leerantworten, keine aus Fehlern abgeleiteten Nullwerte.
+- Aktivierung nach dem letzten Tageszeitfenster: erster regulärer Bericht am
+  8. Oktober 2026 um 08:00 Uhr vorgesehen. Noch kein planmäßiger Berichtsversand
+  zum Zeitpunkt dieser Validierung; keine künstliche Produktionsuhr/-termine.
+- Watcher-Image: `sha256:ef9fb9557c39abe222f5453f80c052184581734894b19c761f4c8bdadf3f9fee`.
+- Scraper-Image: `sha256:085d79f523edabc21f754e15fe97b528be627bdfd8f4edb7dc2fa3fd994d1166`.
+- Kein 24-Stunden-Test, NAS-Neustart, Commit, Push oder GitHub-Release für diese
+  Erweiterung durchgeführt. Externer Ausfallwächter weiterhin nicht integriert.
+
 ## Aktualisierung v0.3.0: verpflichtende Sandbox
 
 Die unten dokumentierten frühen Versuche ohne Sandbox sind historisch. Die

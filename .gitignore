@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 profiles.json
+reports.json
 state/
 *.sqlite
 *.sqlite-shm

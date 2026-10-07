@@ -4,11 +4,11 @@
 
 - SSH: `oemera@192.168.5.15`, über Heimnetz/VPN.
 - Projekt: `/home/oemera/tesla-inventory-checker` auf dem persistenten NAS-Datenvolume.
-- Images: `tesla-inventory-checker:0.3.0` und `tesla-inventory-checker-scraper:0.3.0`, Linux AMD64.
+- Images: `tesla-inventory-checker:0.4.0` und `tesla-inventory-checker-scraper:0.4.0`, Linux AMD64.
 - Diese Installation verwendet lokal gebaute und per SSH übertragene Images.
   Es wurde kein GitHub-Release veröffentlicht und kein Commit/Push ausgeführt.
 - `compose.override.yaml` enthält ausschließlich lokale Betriebseinstellungen.
-  `.env` und `profiles.json` bleiben außerhalb von Git, nur für UID 1000 lesbar.
+  `.env`, `profiles.json` und `reports.json` bleiben außerhalb von Git, nur für UID 1000 lesbar.
 - SQLite liegt dauerhaft in `state/watcher.sqlite`. Nicht während des Betriebs löschen.
 
 Beide Dienste haben `restart: unless-stopped`. Auf diesem NAS ist der UGOS-Dienst
@@ -18,9 +18,14 @@ tatsächlicher NAS-Neustart wurde für dieses Deployment nicht durchgeführt.
 
 ## Aktive Einstellungen
 
-- Vier Neuwagenprofile, Deutschland, Model 3 und Model Y; je Modell eine gemeinsame Abfrage.
-- Alle vier Profile enthalten zusätzlich den freigegebenen Innenraumcode `PREMIUM_WHITE`.
-- Fahrzeugtreffer gehen laut Profilen an Telegram; E-Mail ist dort nicht aktiviert.
+- Zwei Premium-Neuwagenprofile, Deutschland; je Modell eine gemeinsame Abfrage.
+- Model 3: Stealth Grey oder Marine Blue. Model Y: Quicksilver, Stealth Grey oder Marine Blue.
+- Kein Preis-, Innenraum- oder Antriebsfilter in den Suchprofilen.
+- Fahrzeugtreffer gehen laut den aktuellen lokalen Profilen an Telegram und E-Mail.
+- Unabhängige Bestandsberichte um 08:00, 12:00, 16:00 und 20:00 Uhr, Europe/Berlin,
+  über Telegram **und** E-Mail; konfigurierbar in `reports.json`.
+- Die Berichte zählen den kompletten deutschen Tesla-Bestand der Kategorie „Neu“
+  für Model 3 und Model Y inklusive dort gelisteter Vorführwagen, ohne Suchfilter.
 - 60 Sekunden Pause nach jedem Zyklus plus 0–10 Sekunden Zufallsaufschlag.
 - Stille Erstaufnahme (`NOTIFY_ON_FIRST_SEEN=false`): Erst danach neu auftauchende
   passende Fahrzeuge werden gemeldet.
@@ -55,7 +60,7 @@ Nach bewusstem Stoppen wieder starten:
 docker compose up -d
 ```
 
-Profile bearbeiten und anschließend neu laden:
+Profile oder Berichtszeiten/-kanäle bearbeiten und anschließend neu laden:
 
 ```sh
 docker compose restart watcher
@@ -63,6 +68,9 @@ docker compose restart watcher
 
 Geänderte Profile erhalten eine neue stille Erstaufnahme. Die lokale Datei
 `profiles.json` und die NAS-Kopie sind getrennte Dateien; bewusst synchron halten.
+Das gilt ebenso für `reports.json`. Details zu Fehlern, Zeitumstellung, Versand-
+wiederholung und Nachholen innerhalb einer Stunde stehen im README.
+`status.js` zeigt zusätzlich `reports` und `lastReport`.
 
 ## Was die Alarme erfassen — und was nicht
 

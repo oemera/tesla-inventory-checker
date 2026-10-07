@@ -1,5 +1,7 @@
 import nodemailer from "nodemailer";
 import type { Channel, Match, Profile } from "./domain.js";
+import { formatStockReport, type StockReport } from "./stock-report.js";
+import type { ReportConfig } from "./report-config.js";
 
 export interface AlertSender {
   sendMatch(match: Match): Promise<void>;
@@ -23,6 +25,18 @@ export interface NotificationSettings {
 
 export class Notifier implements AlertSender {
   constructor(private readonly settings: NotificationSettings) {}
+
+  async sendStockReport(report: StockReport, channel: Channel): Promise<void> {
+    const body = formatStockReport(report);
+    if (channel === "telegram") await this.sendTelegram(body);
+    else await this.sendEmail("Tesla-Bestandsbericht: Model 3 und Model Y", body);
+  }
+
+  validateReports(config: ReportConfig | undefined): void {
+    if (!config?.enabled) return;
+    if (config.notify.telegram && !this.hasTelegram()) throw new Error("Stock reports use Telegram, but its configuration is incomplete.");
+    if (config.notify.email && !this.settings.smtp) throw new Error("Stock reports use email, but SMTP configuration is incomplete.");
+  }
 
   async sendChannel(match: Match, channel: Channel): Promise<void> {
     const body = formatMatch(match);

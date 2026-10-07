@@ -1,6 +1,6 @@
 services:
   scraper:
-    image: ${SCRAPER_IMAGE:-tesla-inventory-checker-scraper:0.3.0}
+    image: ${SCRAPER_IMAGE:-tesla-inventory-checker-scraper:0.4.0}
     build:
       context: ./scraper
     platform: linux/amd64
@@ -28,16 +28,24 @@ services:
       timeout: 5s
       retries: 3
   watcher:
-    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.3.0}
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.4.0}
     build: .
+    platform: linux/amd64
     init: true
     restart: unless-stopped
     env_file: .env
     environment:
       INVENTORY_PROVIDER: ${INVENTORY_PROVIDER:-browser}
       SCRAPER_URL: http://scraper:8080
+      REPORTS_CONFIG_PATH: /app/config/reports.json
     volumes:
       - ./profiles.json:/app/config/profiles.json:ro
+      - type: bind
+        source: ./reports.json
+        target: /app/config/reports.json
+        read_only: true
+        bind:
+          create_host_path: false
       - ./state:/app/state
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -57,8 +65,9 @@ services:
       start_period: 30s
   live-check:
     profiles: [tools]
-    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.3.0}
+    image: ${WATCHER_IMAGE:-tesla-inventory-checker:0.4.0}
     build: .
+    platform: linux/amd64
     command: [node, dist/live-check.js]
     environment:
       INVENTORY_PROVIDER: browser

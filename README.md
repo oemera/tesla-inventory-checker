@@ -58,6 +58,7 @@ Repository auf dem NAS auschecken; danach im Projektverzeichnis:
 ```sh
 cp .env.example .env
 cp profiles.example.json profiles.json
+cp reports.example.json reports.json
 mkdir -p state
 chmod 600 .env
 ```
@@ -75,7 +76,8 @@ Konfiguration in `.env`:
 | `SESSION_MAX_AGE_SECONDS` | `1800` |
 | `BROWSER_NO_SANDBOX` | Muss `false` bleiben; unsicherer Betrieb wird abgelehnt |
 | `NOTIFY_ON_FIRST_SEEN` | `false`: erste vollständige Aufnahme bleibt still |
-| `TECHNICAL_ALERTS` | `false`: nur Fahrzeugmeldungen; optional gebündelte Abruf-Störungsmeldungen |
+| `TECHNICAL_ALERTS` | `false`: keine Abruf-Störungsmeldungen; mit `true` gebündelte Störungsalarme |
+| `REPORTS_CONFIG_PATH` | `/app/config/reports.json`; separate Konfiguration der Bestandsberichte |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Nur an den Watcher übergeben |
 | `SMTP_*`, `EMAIL_FROM`, `EMAIL_TO` | Optionaler E-Mail-Kanal |
 | `WATCHER_IMAGE`, `SCRAPER_IMAGE` | Veröffentlichte, zusammengehörige Release-Tags |
@@ -83,6 +85,56 @@ Konfiguration in `.env`:
 Aktiviere in den Profilen nur Kanäle, für die Zugangsdaten vorhanden sind.
 Zugangsdaten, reale Profile, Browserdaten und SQLite sind aus Git und Docker-Builds
 ausgeschlossen. Bereits öffentlich geteilte Bot-Tokens vor Produktion rotieren.
+
+## Tägliche Bestandsberichte
+
+`reports.json` steuert unabhängig von `profiles.json` die regelmäßigen Berichte:
+
+```json
+{
+  "enabled": true,
+  "timezone": "Europe/Berlin",
+  "times": ["08:00", "12:00", "16:00", "20:00"],
+  "notify": {"telegram": true, "email": true}
+}
+```
+
+Die Anzahl der Uhrzeiten bestimmt die Häufigkeit (bis zu 24 unterschiedliche
+`HH:mm`-Termine täglich). `enabled: false` deaktiviert Berichte. Mit den beiden
+`notify`-Schaltern lassen sich Telegram und E-Mail einzeln auswählen; aktive
+Kanäle benötigen die entsprechenden Zugangsdaten. Nach Änderungen den Watcher
+neu starten: `docker compose restart watcher`. Die echte Datei bleibt außerhalb
+von Git. Der Docker-Bind-Mount verlangt, dass `reports.json` vor dem Start existiert.
+Beim direkten Programmstart ohne Datei bleibt die optionale Funktion deaktiviert.
+
+Gezählt werden **alle vollständig abgerufenen Fahrzeuge in Teslas Kategorie
+„Neu“ für Deutschland**, getrennt nach Model 3 und Model Y, einschließlich dort
+gelisteter Vorführwagen. Kein Profil-, Preis-, Farb-, Innenraum- oder Antriebsfilter;
+auch ohne aktive Suchprofile funktioniert der Bericht. Die Zahlen sind der
+aktuelle Gesamtbestand, **nicht die neuen Zugänge seit der letzten Meldung**.
+Die Kategorie ist keine Garantie für einen bestimmten Liefertermin.
+
+Profilprüfungen und Berichte teilen sich höchstens 60 Sekunden alte vollständige
+Antworten. Fehlerpausen werden gemeinsam respektiert. Pro Modell steht der
+Datenstand im Bericht. Ein fehlgeschlagener oder unvollständiger Abruf ergibt
+„aktuell nicht verfügbar“, niemals eine erfundene Null oder einen alten Ersatzwert.
+Eine gültige Leerantwort ergibt dagegen ausdrücklich null Fahrzeuge.
+
+Der laufende Watcher prüft fällige Termine auch während seiner Poll-Pausen.
+Laufende Abrufe/Versand können den Termin verzögern. Nach einem kurzen Ausfall
+wird nur der jüngste Termin innerhalb der letzten Stunde nachgeholt; ältere
+Termine werden übersprungen. Bei der Zeitumstellung entfällt eine nicht existente
+Uhrzeit, eine doppelte Uhrzeit wird nur einmal pro Kalendertag gemeldet.
+
+Berichte und Versandzustände werden in SQLite dauerhaft gespeichert. Neustarts
+senden bereits bestätigte Kanäle nicht erneut. Fehlgeschlagene Kanäle werden mit
+steigendem Abstand erneut versucht, höchstens bis eine Stunde nach dem Termin.
+Ein neuer Bericht ersetzt noch ausstehende ältere Berichte. Deaktivierte Kanäle
+oder entfernte Termine verwerfen zugehörige wartende Sendungen. Nachträgliches
+Hinzufügen eines Kanals versendet vorhandene Berichte nicht rückwirkend.
+Wie bei Fahrzeugmeldungen kann ein Absturz genau zwischen externer Annahme und
+lokaler Bestätigung eine Doppelmeldung verursachen. Die Berichte ersetzen keinen
+externen Ausfallwächter: Bei vollständigem NAS-Ausfall bleibt auch ihr Versand aus.
 
 ### Chrome-Sandbox: verpflichtend und geprüft
 
@@ -180,8 +232,9 @@ nach Änderungen `docker compose restart watcher`. Mit
 neuen Profilversion gemeldet. Ein späteres Umschalten spielt bereits still
 aufgenommene Fahrzeuge nicht erneut ab.
 
-Schema v2 ergänzt die Versandwarteschlange. Vor dem Upgrade einer vorhandenen
-Datenbank entsteht automatisch ein konsistentes `*.pre-v2-*.sqlite`-Backup.
+Schema v3 ergänzt die Berichte samt eigener Versandwarteschlange; v2 führte die
+Fahrzeug-Versandwarteschlange ein. Vor dem Upgrade einer vorhandenen
+Datenbank entsteht automatisch ein konsistentes `*.pre-v3-*.sqlite`-Backup.
 Frühere Sendemarkierungen und stille Erstaufnahmen werden konservativ erhalten.
 Fehlgeschlagene v1-Sendungen sind nicht von still beobachteten Fahrzeugen
 unterscheidbar und werden bei der Migration nicht nachträglich geraten.
@@ -219,15 +272,16 @@ docker compose -p tesla-tests -f compose.test.yaml down --volumes
 
 Der Docker-Test läuft auf einem Netzwerk ohne Internetzugang. Er verbindet die
 echte Python-HTTP-Grenze, TypeScript-Normalisierung, Filter und SQLite mit
-kontrollierten Inventardaten und simulierten Nachrichtensendern. Die Fixture-
+kontrollierten Inventardaten und simulierten Nachrichtensendern, einschließlich
+ungefilterter Bestandsberichte für beide Modelle und Kanäle. Die Fixture-
 Implementierung wird nicht in das Produktionsimage kopiert.
 
 ## Releases, Updates und Rückwechsel
 
-Ein Tag wie `v0.3.0` führt zuerst Tests inklusive Offline-Browserprüfung aus und veröffentlicht dann zwei AMD64-Images:
+Ein Tag wie `v0.4.0` führt zuerst Tests inklusive Offline-Browserprüfung aus und veröffentlicht dann zwei AMD64-Images:
 
-- `ghcr.io/<owner>/<repository>:0.3.0`
-- `ghcr.io/<owner>/<repository>-scraper:0.3.0`
+- `ghcr.io/<owner>/<repository>:0.4.0`
+- `ghcr.io/<owner>/<repository>-scraper:0.4.0`
 
 Compose verwendet zunächst lokale Image-Namen für `docker compose build`.
 Für Releases die beiden Image-Variablen in `.env` auf die GHCR-Namen setzen.
@@ -245,7 +299,9 @@ docker compose up -d watcher
 ```
 
 Beide Image-Versionen gemeinsam aktualisieren. Für einen rollbackfähigen Datenstand
-den Watcher vorher stoppen und `state` sichern. Bei einem Rückwechsel auf v1 **auch
+den Watcher vorher stoppen und `state` sowie lokale Konfigurationen sichern.
+Vor dem ersten Upgrade auf v0.4.0 auch `reports.json` anlegen.
+Bei einem Rückwechsel auf eine ältere Datenbankschema-Version **auch
 das vor der Migration gesicherte Datenbankabbild wiederherstellen**, nicht die neue
 Datenbank mit dem alten Programm weiterverwenden. Währenddessen entstandene
 Versandzustände gehen beim Rückwechsel verloren; Doppelmeldungen sind möglich.

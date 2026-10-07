@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Channel, Match, Profile } from "./domain.js";
+import type { ReportConfig } from "./report-config.js";
+import { REPORT_WINDOW_MS, type StockReport } from "./stock-report.js";
 
 export interface Delivery { id: number; channel: Channel; payload: string; attempts: number }
 
@@ -14,8 +16,8 @@ export class Store {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (version > 2) { this.db.close(); throw new Error("Database version is newer than this application."); }
-    if (existing && version < 2) this.db.prepare("VACUUM INTO ?").run(`${path}.pre-v2-${Date.now()}.sqlite`);
+    if (version > 3) { this.db.close(); throw new Error("Database version is newer than this application."); }
+    if (existing && version < 3) this.db.prepare("VACUUM INTO ?").run(`${path}.pre-v3-${Date.now()}.sqlite`);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(`
       BEGIN IMMEDIATE;
@@ -58,7 +60,25 @@ export class Store {
         sent_at TEXT,
         UNIQUE(profile_id, revision, vehicle_id, channel)
       ) STRICT;
-      PRAGMA user_version = 2;
+      CREATE TABLE IF NOT EXISTS stock_reports (
+        id TEXT PRIMARY KEY,
+        slot_date TEXT NOT NULL,
+        slot_time TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS stock_report_deliveries (
+        id INTEGER PRIMARY KEY,
+        report_id TEXT NOT NULL REFERENCES stock_reports(id),
+        channel TEXT NOT NULL CHECK(channel IN ('telegram', 'email')),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'sent', 'cancelled', 'expired')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt INTEGER NOT NULL DEFAULT 0,
+        sent_at TEXT,
+        UNIQUE(report_id, channel)
+      ) STRICT;
+      PRAGMA user_version = 3;
       COMMIT;
     `);
   }
@@ -118,6 +138,53 @@ export class Store {
 
   pendingCount(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM deliveries WHERE status='pending'").get() as {n: number}).n;
+  }
+
+  hasStockReport(id: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM stock_reports WHERE id=?").get(id));
+  }
+
+  queueStockReport(report: StockReport, channels: Record<Channel, boolean>): void {
+    this.transaction(() => {
+      const inserted = this.db.prepare("INSERT OR IGNORE INTO stock_reports (id,slot_date,slot_time,timezone,payload,expires_at) VALUES (?,?,?,?,?,?)")
+        .run(report.slot.id, report.slot.date, report.slot.time, report.slot.timezone, JSON.stringify(report), report.slot.dueAt + REPORT_WINDOW_MS);
+      if (!inserted.changes) return;
+      // Do not deliver an older pending report after a newer report supersedes it.
+      this.db.prepare("UPDATE stock_report_deliveries SET status='expired' WHERE status='pending' AND report_id IN (SELECT id FROM stock_reports WHERE expires_at<?)")
+        .run(report.slot.dueAt + REPORT_WINDOW_MS);
+      for (const channel of ["telegram", "email"] as const) {
+        if (channels[channel]) this.db.prepare("INSERT INTO stock_report_deliveries (report_id,channel,status) VALUES (?,?,'pending')").run(report.slot.id, channel);
+      }
+    });
+  }
+
+  reconcileStockReports(config: ReportConfig | undefined, now = Date.now()): void {
+    this.db.prepare("UPDATE stock_report_deliveries SET status='expired' WHERE status='pending' AND report_id IN (SELECT id FROM stock_reports WHERE expires_at<=?)").run(now);
+    if (!config?.enabled) {
+      this.db.prepare("UPDATE stock_report_deliveries SET status='cancelled' WHERE status='pending'").run();
+      return;
+    }
+    const pending = this.db.prepare("SELECT d.id,d.channel,r.slot_time,r.timezone FROM stock_report_deliveries d JOIN stock_reports r ON r.id=d.report_id WHERE d.status='pending'")
+      .all() as Array<{id: number; channel: Channel; slot_time: string; timezone: string}>;
+    for (const row of pending) {
+      if (!config.notify[row.channel] || row.timezone !== config.timezone || !config.times.includes(row.slot_time)) {
+        this.db.prepare("UPDATE stock_report_deliveries SET status='cancelled' WHERE id=?").run(row.id);
+      }
+    }
+  }
+
+  pendingStockReports(now = Date.now()): Delivery[] {
+    return this.db.prepare(`SELECT d.id,d.channel,r.payload,d.attempts FROM stock_report_deliveries d JOIN stock_reports r ON r.id=d.report_id
+      WHERE d.status='pending' AND d.next_attempt<=? AND r.expires_at>? ORDER BY d.id LIMIT 10`).all(now, now) as unknown as Delivery[];
+  }
+
+  stockReportDelivered(id: number): void {
+    this.db.prepare("UPDATE stock_report_deliveries SET status='sent',sent_at=? WHERE id=?").run(new Date().toISOString(), id);
+  }
+
+  retryStockReport(delivery: Delivery, now = Date.now()): void {
+    const delay = Math.min(3600, 30 * 2 ** Math.min(delivery.attempts, 7));
+    this.db.prepare("UPDATE stock_report_deliveries SET attempts=attempts+1,next_attempt=? WHERE id=?").run(now + delay * 1000, delivery.id);
   }
 
   heartbeat(): void {

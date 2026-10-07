@@ -93,7 +93,7 @@ test("v1 backup and VIN notification migration preserve prior deliveries", () =>
   store.observe(legacy); store.recordNotification(legacy); store.markBaselineComplete(profile.id); store.close();
   const db = new DatabaseSync(path); db.exec("DROP TABLE deliveries; PRAGMA user_version=0;"); db.close();
   store = new Store(path); store.queueMatches(profile, [match], true);
-  assert.equal(store.pendingCount(), 0); assert.equal(readdirSync(dir).filter((x) => x.includes("pre-v2")).length, 1); store.close();
+  assert.equal(store.pendingCount(), 0); assert.equal(readdirSync(dir).filter((x) => x.includes("pre-v3")).length, 1); store.close();
 });
 
 test("strict filters don't confuse AWD with RWD or black with black/white", () => {
